@@ -1,0 +1,10 @@
+[Unit]
+Description=pg-perfect-ticker daemon
+
+[Service]
+Type=notify
+ExecStart=/path/to/utility/pg-perfect-ticker /path/to/config/pg-perfect-ticker.cfg
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

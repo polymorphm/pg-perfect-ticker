@@ -1,0 +1,331 @@
+#!/usr/bin/env python3
+# -*- mode: python; coding: utf-8 -*-
+
+assert str is not bytes, 'deep deep deep obsolete version of python'
+
+import argparse
+import configparser
+import psycopg2
+import threading
+import asyncio
+import signal
+import concurrent.futures
+import datetime
+import systemd.daemon
+
+CONFIG_SECTION = 'pg-perfect-ticker'
+
+class ConfigError(Exception):
+    pass
+
+class ConfigCtx:
+    pass
+
+class TickerCtx:
+    pass
+
+class TickerTaskCtx:
+    pass
+
+class SimpleDbPool:
+    def __init__(self):
+        self.lock = threading.RLock()
+        self.db_by_dsn = {}
+    
+    def new_con(self, dsn):
+        return psycopg2.connect(dsn)
+    
+    def check_con(self, con):
+        try:
+            with con.cursor() as cur:
+                cur.execute('SELECT 1')
+        except (psycopg2.Warning, psycopg2.Error):
+            return False
+        
+        return True
+    
+    def get_con(self, dsn):
+        with self.lock:
+            con = self.db_by_dsn.pop(dsn, None)
+        
+        if con is None:
+            return self.new_con(dsn)
+        
+        if not self.check_con(con):
+            con.close()
+            
+            return self.new_con(dsn)
+        
+        return con
+    
+    def save_con(self, dsn, con):
+        try:
+            con.reset()
+        except (psycopg2.Warning, psycopg2.Error):
+            con.close()
+            
+            return
+        
+        with self.lock:
+            self.db_by_dsn[dsn] = con
+
+def try_print(*args, **kwargs):
+    try:
+        return print(*args, **kwargs)
+    except OSError:
+        pass
+
+def blocking_read_config(config_ctx, config_path):
+    config = configparser.ConfigParser(
+        interpolation=configparser.ExtendedInterpolation(),
+    )
+    
+    config.read(config_path, encoding='utf-8')
+    
+    thread_pool_list_str = config.get(CONFIG_SECTION, 'thread_pool_list')
+    db_con_list_str = config.get(CONFIG_SECTION, 'db_con_list')
+    task_list_str = config.get(CONFIG_SECTION, 'task_list')
+    
+    config_ctx.thread_pool_list = tuple(thread_pool_list_str.split())
+    config_ctx.db_con_list = tuple(db_con_list_str.split())
+    config_ctx.task_list = tuple(task_list_str.split())
+    
+    config_ctx.max_workers_by_thread_pool_map = {}
+    config_ctx.dsn_by_db_con_map = {}
+    config_ctx.sql_by_task_map = {}
+    config_ctx.timer_by_task_map = {}
+    config_ctx.thread_pool_by_task_map = {}
+    config_ctx.db_con_by_task_map = {}
+    
+    for thread_pool in config_ctx.thread_pool_list:
+        value = config.getint(CONFIG_SECTION, '{}.max_workers'.format(thread_pool))
+        
+        if value < 1:
+            raise ConfigError('invalid value of max_workers param: {!r}'.format(value))
+        
+        config_ctx.max_workers_by_thread_pool_map[thread_pool] = value
+    
+    for db_con in config_ctx.db_con_list:
+        value = config.get(CONFIG_SECTION, '{}.dsn'.format(db_con))
+        
+        config_ctx.dsn_by_db_con_map[db_con] = value
+    
+    for task in config_ctx.task_list:
+        value = config.get(CONFIG_SECTION, '{}.sql'.format(task))
+        
+        config_ctx.sql_by_task_map[task] = value
+    
+    for task in config_ctx.task_list:
+        value = config.getfloat(CONFIG_SECTION, '{}.timer'.format(task))
+        
+        if value <= 0:
+            raise ConfigError('invalid value of timer param: {!r}'.format(value))
+        
+        config_ctx.timer_by_task_map[task] = value
+    
+    for task in config_ctx.task_list:
+        value = config.get(CONFIG_SECTION, '{}.thread_pool'.format(task))
+        
+        if value not in config_ctx.thread_pool_list:
+            raise ConfigError('invalid value of thread_pool param: {!r}'.format(value))
+        
+        config_ctx.thread_pool_by_task_map[task] = value
+    
+    for task in config_ctx.task_list:
+        value = config.get(CONFIG_SECTION, '{}.db_con'.format(task))
+        
+        if value not in config_ctx.db_con_list:
+            raise ConfigError('invalid value of db_con param: {!r}'.format(value))
+        
+        config_ctx.db_con_by_task_map[task] = value
+
+def blocking_ticker_task_process(ticker_task_ctx):
+    con = ticker_task_ctx.db_pool.get_con(ticker_task_ctx.db_con_dsn)
+    
+    try:
+        assert not con.autocommit
+        
+        with con.cursor() as cur:
+            cur.execute(ticker_task_ctx.task_sql)
+        
+        con.commit()
+    finally:
+        ticker_task_ctx.db_pool.save_con(ticker_task_ctx.db_con_dsn, con)
+
+@asyncio.coroutine
+def ticker_task_process(loop, ticker_task_ctx):
+    try:
+        try_print('ticker task ({!r}, {!r}, {!r}): enter'.format(
+            ticker_task_ctx.task_name,
+            ticker_task_ctx.thread_pool_name,
+            ticker_task_ctx.db_con_name,
+        ))
+        
+        exe_start_time = datetime.datetime.utcnow().timestamp()
+        timer = ticker_task_ctx.task_timer
+        
+        while True:
+            try_print('ticker task ({!r}, {!r}, {!r}): execute'.format(
+                ticker_task_ctx.task_name,
+                ticker_task_ctx.thread_pool_name,
+                ticker_task_ctx.db_con_name,
+            ))
+            
+            exe_fut = loop.run_in_executor(
+                ticker_task_ctx.thread_pool,
+                blocking_ticker_task_process,
+                ticker_task_ctx,
+            )
+            
+            yield from asyncio.wait((exe_fut,), loop=loop)
+            
+            if exe_fut.done() and exe_fut.exception():
+                exc_type = type(exe_fut.exception())
+                exc_str = str(exe_fut.exception())
+                
+                try_print('ticker task ({!r}, {!r}, {!r}): error {!r}: {}'.format(
+                    ticker_task_ctx.task_name,
+                    ticker_task_ctx.thread_pool_name,
+                    ticker_task_ctx.db_con_name,
+                    exc_type,
+                    exc_str
+                ))
+            
+            exe_stop_time = datetime.datetime.utcnow().timestamp()
+            fixed_timer = timer - (exe_stop_time - exe_start_time)
+            
+            if fixed_timer < 0:
+                fixed_timer = 0
+            
+            if fixed_timer > timer:
+                fixed_timer = timer
+            
+            exe_start_time = exe_stop_time + fixed_timer
+            
+            if fixed_timer:
+                try_print('ticker task ({!r}, {!r}, {!r}): sleep {!r}'.format(
+                    ticker_task_ctx.task_name,
+                    ticker_task_ctx.thread_pool_name,
+                    ticker_task_ctx.db_con_name,
+                    fixed_timer
+                ))
+                
+                yield from asyncio.sleep(fixed_timer, loop=loop)
+            else:
+                try_print('ticker task ({!r}, {!r}, {!r}): no sleep'.format(
+                    ticker_task_ctx.task_name,
+                    ticker_task_ctx.thread_pool_name,
+                    ticker_task_ctx.db_con_name,
+                ))
+    finally:
+        try_print('ticker task ({!r}, {!r}, {!r}): exit'.format(
+            ticker_task_ctx.task_name,
+            ticker_task_ctx.thread_pool_name,
+            ticker_task_ctx.db_con_name,
+        ))
+
+@asyncio.coroutine
+def ticker_init(loop, ticker_ctx, config_path, config_ctx):
+    ticker_ctx.config_path = config_path
+    ticker_ctx.config_ctx = config_ctx
+    ticker_ctx.shutdown_event = asyncio.Event(loop=loop)
+    ticker_ctx.db_pool = SimpleDbPool()
+    
+    ticker_ctx.thread_pool_by_thread_pool_name = {}
+    
+    for thread_pool_name in ticker_ctx.config_ctx.thread_pool_list:
+        thread_pool = concurrent.futures.ThreadPoolExecutor(
+            max_workers=ticker_ctx.config_ctx.max_workers_by_thread_pool_map[thread_pool_name]
+        )
+        
+        ticker_ctx.thread_pool_by_thread_pool_name[thread_pool_name] = thread_pool
+
+@asyncio.coroutine
+def ticker_shutdown_handler(loop, ticker_ctx):
+    ticker_ctx.shutdown_event.set()
+
+@asyncio.coroutine
+def ticker_process(loop, ticker_ctx):
+    ticker_task_process_fut_list = []
+    
+    for task_name in ticker_ctx.config_ctx.task_list:
+        thread_pool_name = ticker_ctx.config_ctx.thread_pool_by_task_map[task_name]
+        db_con_name = ticker_ctx.config_ctx.db_con_by_task_map[task_name]
+        ticker_task_ctx = TickerTaskCtx()
+        
+        ticker_task_ctx.task_name = task_name
+        ticker_task_ctx.thread_pool_name = thread_pool_name
+        ticker_task_ctx.db_con_name = db_con_name
+        ticker_task_ctx.thread_pool_max_workers = ticker_ctx.config_ctx.max_workers_by_thread_pool_map[thread_pool_name]
+        ticker_task_ctx.db_con_dsn = ticker_ctx.config_ctx.dsn_by_db_con_map[db_con_name]
+        ticker_task_ctx.task_sql = ticker_ctx.config_ctx.sql_by_task_map[task_name]
+        ticker_task_ctx.task_timer = ticker_ctx.config_ctx.timer_by_task_map[task_name]
+        ticker_task_ctx.thread_pool = ticker_ctx.thread_pool_by_thread_pool_name[thread_pool_name]
+        ticker_task_ctx.db_pool = ticker_ctx.db_pool
+        
+        ticker_task_process_fut = loop.create_task(
+            ticker_task_process(loop, ticker_task_ctx),
+        )
+        
+        ticker_task_process_fut_list.append(ticker_task_process_fut)
+    
+    try:
+        yield from ticker_ctx.shutdown_event.wait()
+    finally:
+        for ticker_task_process_fut in ticker_task_process_fut_list:
+            ticker_task_process_fut.cancel()
+
+def blocking_ticker_shutdown_thread_pool_list(ticker_ctx):
+    for thread_pool_name in ticker_ctx.config_ctx.thread_pool_list:
+        ticker_ctx.thread_pool_by_thread_pool_name[thread_pool_name].shutdown()
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='utility for scheduling Postgresql jobs'
+    )
+    
+    parser.add_argument(
+        'config',
+        metavar='CONFIG-PATH',
+        help='path to config file'
+    )
+    
+    args = parser.parse_args()
+    
+    ticker_ctx = TickerCtx()
+    
+    config_path = args.config
+    config_ctx = ConfigCtx()
+    loop = asyncio.get_event_loop()
+    
+    blocking_read_config(config_ctx, config_path)
+    
+    ticker_init_fut = loop.create_task(
+        ticker_init(loop, ticker_ctx, config_path, config_ctx),
+    )
+    
+    loop.run_until_complete(ticker_init_fut)
+    
+    def shutdown_handler():
+        loop.create_task(
+            ticker_shutdown_handler(loop, ticker_ctx),
+        )
+    
+    loop.add_signal_handler(signal.SIGINT, shutdown_handler)
+    loop.add_signal_handler(signal.SIGTERM, shutdown_handler)
+    
+    systemd.daemon.notify('READY=1', unset_environment=True)
+    
+    ticker_process_fut = loop.create_task(
+        ticker_process(loop, ticker_ctx),
+    )
+    
+    loop.run_until_complete(ticker_process_fut)
+    
+    blocking_ticker_shutdown_thread_pool_list(ticker_ctx)
+    
+    loop.remove_signal_handler(signal.SIGINT)
+    loop.remove_signal_handler(signal.SIGTERM)
+
+if __name__ == '__main__':
+    main()
