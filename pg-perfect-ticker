@@ -6,6 +6,8 @@ assert str is not bytes, 'deep deep deep obsolete version of python'
 import sys
 import argparse
 import configparser
+import json
+import logging.config
 import psycopg2
 import threading
 import contextlib
@@ -16,6 +18,9 @@ import datetime
 import systemd.daemon
 
 CONFIG_SECTION = 'pg-perfect-ticker'
+LOGGER_NAME = 'pg-perfect-ticker'
+
+_logger = None
 
 class ConfigError(Exception):
     pass
@@ -113,6 +118,21 @@ def try_print(*args, **kwargs):
     except OSError:
         pass
 
+def log(level, msg):
+    global _logger
+  
+    if _logger is not None:
+        _logger.log(level, msg)
+        
+        return
+    
+    if level >= logging.WARNING:
+        try_print(msg, file=sys.stderr)
+        
+        return
+    
+    try_print(msg)
+
 def blocking_read_config(config_ctx, config_path):
     config = configparser.ConfigParser(
         interpolation=configparser.ExtendedInterpolation(),
@@ -191,7 +211,7 @@ def blocking_ticker_task_process(ticker_task_ctx):
 @asyncio.coroutine
 def ticker_task_process(loop, ticker_task_ctx):
     try:
-        try_print('ticker task ({!r}, {!r}, {!r}): enter'.format(
+        log(logging.INFO, 'ticker task ({!r}, {!r}, {!r}): enter'.format(
             ticker_task_ctx.task_name,
             ticker_task_ctx.thread_pool_name,
             ticker_task_ctx.db_con_name,
@@ -201,7 +221,7 @@ def ticker_task_process(loop, ticker_task_ctx):
         timer = ticker_task_ctx.task_timer
         
         while True:
-            try_print('ticker task ({!r}, {!r}, {!r}): execute'.format(
+            log(logging.INFO, 'ticker task ({!r}, {!r}, {!r}): execute'.format(
                 ticker_task_ctx.task_name,
                 ticker_task_ctx.thread_pool_name,
                 ticker_task_ctx.db_con_name,
@@ -219,13 +239,13 @@ def ticker_task_process(loop, ticker_task_ctx):
                 exc_type = type(exe_fut.exception())
                 exc_str = str(exe_fut.exception())
                 
-                try_print('ticker task ({!r}, {!r}, {!r}): error {!r}: {}'.format(
+                log(logging.WARNING, 'ticker task ({!r}, {!r}, {!r}): error {!r}: {}'.format(
                     ticker_task_ctx.task_name,
                     ticker_task_ctx.thread_pool_name,
                     ticker_task_ctx.db_con_name,
                     exc_type,
                     exc_str
-                ), file=sys.stderr)
+                ))
             
             exe_stop_time = datetime.datetime.utcnow().timestamp()
             fixed_timer = timer - (exe_stop_time - exe_start_time)
@@ -239,7 +259,7 @@ def ticker_task_process(loop, ticker_task_ctx):
             exe_start_time = exe_stop_time + fixed_timer
             
             if fixed_timer:
-                try_print('ticker task ({!r}, {!r}, {!r}): sleep {!r}'.format(
+                log(logging.INFO, 'ticker task ({!r}, {!r}, {!r}): sleep {!r}'.format(
                     ticker_task_ctx.task_name,
                     ticker_task_ctx.thread_pool_name,
                     ticker_task_ctx.db_con_name,
@@ -248,13 +268,13 @@ def ticker_task_process(loop, ticker_task_ctx):
                 
                 yield from asyncio.sleep(fixed_timer, loop=loop)
             else:
-                try_print('ticker task ({!r}, {!r}, {!r}): no sleep'.format(
+                log(logging.INFO, 'ticker task ({!r}, {!r}, {!r}): no sleep'.format(
                     ticker_task_ctx.task_name,
                     ticker_task_ctx.thread_pool_name,
                     ticker_task_ctx.db_con_name,
                 ))
     finally:
-        try_print('ticker task ({!r}, {!r}, {!r}): exit'.format(
+        log(logging.INFO, 'ticker task ({!r}, {!r}, {!r}): exit'.format(
             ticker_task_ctx.task_name,
             ticker_task_ctx.thread_pool_name,
             ticker_task_ctx.db_con_name,
@@ -318,8 +338,16 @@ def blocking_ticker_shutdown(ticker_ctx):
     ticker_ctx.db_pool.close()
 
 def main():
+    global _logger
+    
     parser = argparse.ArgumentParser(
         description='utility for scheduling Postgresql jobs'
+    )
+    
+    parser.add_argument(
+        '--log-config',
+        metavar='LOG-CONFIG-PATH',
+        help='path to log config file'
     )
     
     parser.add_argument(
@@ -329,6 +357,12 @@ def main():
     )
     
     args = parser.parse_args()
+    
+    if args.log_config is not None:
+        with open(args.log_config, encoding='utf-8') as log_fd:
+            log_dict = json.load(log_fd)
+        logging.config.dictConfig(log_dict)
+        _logger = logging.getLogger(LOGGER_NAME)
     
     ticker_ctx = TickerCtx()
     

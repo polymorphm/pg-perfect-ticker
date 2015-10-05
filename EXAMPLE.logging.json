@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "handlers": {
+    "console": {
+      "class": "logging.StreamHandler",
+      "level": "WARNING",
+      "stream": "ext://sys.stderr"
+    },
+    "file": {
+      "class": "logging.handlers.RotatingFileHandler",
+      "filename": "/tmp/EXAMPLE.pg-perfect-ticker.log",
+      "maxBytes": 10000000,
+      "backupCount": 5
+    }
+  },
+  "loggers": {
+    "pg-perfect-ticker": {
+      "level": "INFO",
+      "handlers": ["console", "file"]
+    }
+  }
+}
