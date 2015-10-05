@@ -3,6 +3,7 @@
 
 assert str is not bytes, 'deep deep deep obsolete version of python'
 
+import sys
 import argparse
 import configparser
 import psycopg2
@@ -225,7 +226,7 @@ def ticker_task_process(loop, ticker_task_ctx):
                     ticker_task_ctx.db_con_name,
                     exc_type,
                     exc_str
-                ))
+                ), file=sys.stderr)
             
             exe_stop_time = datetime.datetime.utcnow().timestamp()
             fixed_timer = timer - (exe_stop_time - exe_start_time)
