@@ -7,6 +7,7 @@ import argparse
 import configparser
 import psycopg2
 import threading
+import contextlib
 import asyncio
 import signal
 import concurrent.futures
@@ -68,6 +69,15 @@ class SimpleDbPool:
         
         with self.lock:
             self.db_by_dsn[dsn] = con
+
+@contextlib.contextmanager
+def get_db_con_ctxmgr(db_pool, dsn):
+    con = db_pool.get_con(dsn)
+    
+    try:
+        yield con
+    finally:
+        db_pool.save_con(dsn, con)
 
 def try_print(*args, **kwargs):
     try:
@@ -140,17 +150,15 @@ def blocking_read_config(config_ctx, config_path):
         config_ctx.db_con_by_task_map[task] = value
 
 def blocking_ticker_task_process(ticker_task_ctx):
-    con = ticker_task_ctx.db_pool.get_con(ticker_task_ctx.db_con_dsn)
-    
-    try:
+    with \
+            get_db_con_ctxmgr(ticker_task_ctx.db_pool, ticker_task_ctx.db_con_dsn) \
+            as con:
         assert not con.autocommit
         
         with con.cursor() as cur:
             cur.execute(ticker_task_ctx.task_sql)
         
         con.commit()
-    finally:
-        ticker_task_ctx.db_pool.save_con(ticker_task_ctx.db_con_dsn, con)
 
 @asyncio.coroutine
 def ticker_task_process(loop, ticker_task_ctx):
