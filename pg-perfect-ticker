@@ -244,7 +244,7 @@ def ticker_task_process(loop, ticker_task_ctx):
                     ticker_task_ctx.thread_pool_name,
                     ticker_task_ctx.db_con_name,
                     exc_type,
-                    exc_str
+                    exc_str,
                 ))
             
             exe_stop_time = datetime.datetime.utcnow().timestamp()
@@ -263,7 +263,7 @@ def ticker_task_process(loop, ticker_task_ctx):
                     ticker_task_ctx.task_name,
                     ticker_task_ctx.thread_pool_name,
                     ticker_task_ctx.db_con_name,
-                    fixed_timer
+                    fixed_timer,
                 ))
                 
                 yield from asyncio.sleep(fixed_timer, loop=loop)
