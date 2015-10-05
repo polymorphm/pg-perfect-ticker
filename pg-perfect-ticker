@@ -31,7 +31,7 @@ class TickerTaskCtx:
 class SimpleDbPool:
     def __init__(self):
         self.lock = threading.RLock()
-        self.db_by_dsn = {}
+        self.con_list_by_dsn = {}
     
     def new_con(self, dsn):
         return psycopg2.connect(dsn)
@@ -47,7 +47,15 @@ class SimpleDbPool:
     
     def get_con(self, dsn):
         with self.lock:
-            con = self.db_by_dsn.pop(dsn, None)
+            try:
+                con_list = self.con_list_by_dsn[dsn]
+            except KeyError:
+                con_list = self.con_list_by_dsn[dsn] = []
+            
+            try:
+                con = con_list.pop()
+            except IndexError:
+                con = None
         
         if con is None:
             return self.new_con(dsn)
@@ -68,7 +76,27 @@ class SimpleDbPool:
             return
         
         with self.lock:
-            self.db_by_dsn[dsn] = con
+            try:
+                con_list = self.con_list_by_dsn[dsn]
+            except KeyError:
+                con_list = self.con_list_by_dsn[dsn] = []
+            
+            con_list.append(con)
+    
+    def close(self):
+        all_con_list = []
+        
+        with self.lock:
+            for dsn in self.con_list_by_dsn:
+                con_list = self.con_list_by_dsn[dsn]
+                
+                for con in con_list:
+                    all_con_list.append(con)
+            
+            self.con_list_by_dsn.clear()
+        
+        for con in all_con_list:
+            con.close()
 
 @contextlib.contextmanager
 def get_db_con_ctxmgr(db_pool, dsn):
@@ -283,9 +311,11 @@ def ticker_process(loop, ticker_ctx):
         for ticker_task_process_fut in ticker_task_process_fut_list:
             ticker_task_process_fut.cancel()
 
-def blocking_ticker_shutdown_thread_pool_list(ticker_ctx):
+def blocking_ticker_shutdown(ticker_ctx):
     for thread_pool_name in ticker_ctx.config_ctx.thread_pool_list:
         ticker_ctx.thread_pool_by_thread_pool_name[thread_pool_name].shutdown()
+    
+    ticker_ctx.db_pool.close()
 
 def main():
     parser = argparse.ArgumentParser(
@@ -330,7 +360,7 @@ def main():
     
     loop.run_until_complete(ticker_process_fut)
     
-    blocking_ticker_shutdown_thread_pool_list(ticker_ctx)
+    blocking_ticker_shutdown(ticker_ctx)
     
     loop.remove_signal_handler(signal.SIGINT)
     loop.remove_signal_handler(signal.SIGTERM)
