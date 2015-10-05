@@ -39,8 +39,7 @@ class SimpleDbPool:
     
     def check_con(self, con):
         try:
-            with con.cursor() as cur:
-                cur.execute('SELECT 1')
+            con.reset()
         except (psycopg2.Warning, psycopg2.Error):
             return False
         
