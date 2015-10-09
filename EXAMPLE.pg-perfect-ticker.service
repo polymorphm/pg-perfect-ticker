@@ -3,7 +3,7 @@ Description=pg-perfect-ticker daemon
 
 [Service]
 Type=notify
-ExecStart=/path/to/utility/pg-perfect-ticker /path/to/config/pg-perfect-ticker.cfg
+ExecStart=/path/to/utility/pg-perfect-ticker --log-config=/path/to/logging.json /path/to/config/pg-perfect-ticker.cfg
 Restart=always
 
 [Install]
