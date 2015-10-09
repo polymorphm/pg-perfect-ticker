@@ -7,4 +7,4 @@ Utility for scheduling Postgresql jobs.
 Status
 ------
 
-Release: pg-perfect-ticker-0.1.1 .
+Release: pg-perfect-ticker-0.1.2 .
