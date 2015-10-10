@@ -333,6 +333,8 @@ def ticker_task_process(loop, ticker_task_ctx):
 
 @asyncio.coroutine
 def ticker_init(loop, ticker_ctx, config_path, config_ctx):
+    log(logging.INFO, 'ticker init: begin')
+    
     ticker_ctx.config_path = config_path
     ticker_ctx.config_ctx = config_ctx
     ticker_ctx.shutdown_event = asyncio.Event(loop=loop)
@@ -346,6 +348,8 @@ def ticker_init(loop, ticker_ctx, config_path, config_ctx):
         )
         
         ticker_ctx.thread_pool_by_thread_pool_name[thread_pool_name] = thread_pool
+    
+    log(logging.INFO, 'ticker init: done')
 
 @asyncio.coroutine
 def ticker_shutdown_handler(loop, ticker_ctx):
@@ -383,10 +387,14 @@ def ticker_process(loop, ticker_ctx):
             ticker_task_process_fut.cancel()
 
 def blocking_ticker_shutdown(ticker_ctx):
+    log(logging.INFO, 'ticker shutdown: begin')
+    
     for thread_pool_name in ticker_ctx.config_ctx.thread_pool_list:
         ticker_ctx.thread_pool_by_thread_pool_name[thread_pool_name].shutdown()
     
     ticker_ctx.db_pool.close()
+    
+    log(logging.INFO, 'ticker shutdown: done')
 
 def main():
     global _logger
@@ -409,46 +417,45 @@ def main():
     
     args = parser.parse_args()
     
-    if args.log_config is not None:
-        with open(args.log_config, encoding='utf-8') as log_fd:
-            log_dict = json.load(log_fd)
-        logging.config.dictConfig(log_dict)
-        _logger = logging.getLogger(LOGGER_NAME)
-    
-    ticker_ctx = TickerCtx()
-    
-    config_path = args.config
-    config_ctx = ConfigCtx()
-    loop = asyncio.get_event_loop()
-    
-    blocking_read_config(config_ctx, config_path)
-    
-    ticker_init_fut = loop.create_task(
-        ticker_init(loop, ticker_ctx, config_path, config_ctx),
-    )
-    
-    loop.run_until_complete(ticker_init_fut)
-    
-    def shutdown_handler():
-        loop.create_task(
-            ticker_shutdown_handler(loop, ticker_ctx),
+    with contextlib.ExitStack() as stack:
+        if args.log_config is not None:
+            with open(args.log_config, encoding='utf-8') as log_fd:
+                log_dict = json.load(log_fd)
+            logging.config.dictConfig(log_dict)
+            _logger = logging.getLogger(LOGGER_NAME)
+        
+        ticker_ctx = TickerCtx()
+        
+        config_path = args.config
+        config_ctx = ConfigCtx()
+        loop = asyncio.get_event_loop()
+        
+        blocking_read_config(config_ctx, config_path)
+        
+        ticker_init_fut = loop.create_task(
+            ticker_init(loop, ticker_ctx, config_path, config_ctx),
         )
-    
-    loop.add_signal_handler(signal.SIGINT, shutdown_handler)
-    loop.add_signal_handler(signal.SIGTERM, shutdown_handler)
-    
-    sd.notify('READY=1', unset_environment=True)
-    
-    ticker_process_fut = loop.create_task(
-        ticker_process(loop, ticker_ctx),
-    )
-    
-    loop.run_until_complete(ticker_process_fut)
-    
-    blocking_ticker_shutdown(ticker_ctx)
-    
-    loop.remove_signal_handler(signal.SIGINT)
-    loop.remove_signal_handler(signal.SIGTERM)
+        
+        loop.run_until_complete(ticker_init_fut)
+        stack.callback(blocking_ticker_shutdown, ticker_ctx)
+        
+        def shutdown_handler():
+            loop.create_task(
+                ticker_shutdown_handler(loop, ticker_ctx),
+            )
+        
+        loop.add_signal_handler(signal.SIGINT, shutdown_handler)
+        stack.callback(loop.remove_signal_handler, signal.SIGINT)
+        loop.add_signal_handler(signal.SIGTERM, shutdown_handler)
+        stack.callback(loop.remove_signal_handler, signal.SIGTERM)
+        
+        sd.notify('READY=1', unset_environment=True)
+        
+        ticker_process_fut = loop.create_task(
+            ticker_process(loop, ticker_ctx),
+        )
+        
+        loop.run_until_complete(ticker_process_fut)
 
 if __name__ == '__main__':
     main()
