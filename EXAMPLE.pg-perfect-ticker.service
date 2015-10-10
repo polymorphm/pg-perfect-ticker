@@ -1,5 +1,6 @@
 [Unit]
 Description=pg-perfect-ticker daemon
+After=postgresql
 
 [Service]
 Type=notify
