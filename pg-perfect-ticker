@@ -34,7 +34,7 @@ import contextlib
 import asyncio
 import signal
 import concurrent.futures
-import datetime
+import time
 
 try:
     import systemd.daemon as sd
@@ -268,7 +268,7 @@ def ticker_task_process(loop, ticker_task_ctx):
             ticker_task_ctx.db_con_name,
         ))
         
-        exe_start_time = datetime.datetime.utcnow().timestamp()
+        exe_start_time = time.monotonic()
         timer = ticker_task_ctx.task_timer
         
         while True:
@@ -298,7 +298,7 @@ def ticker_task_process(loop, ticker_task_ctx):
                     exc_str,
                 ))
             
-            exe_stop_time = datetime.datetime.utcnow().timestamp()
+            exe_stop_time = time.monotonic()
             fixed_timer = timer - (exe_stop_time - exe_start_time)
             
             if fixed_timer < 0:
