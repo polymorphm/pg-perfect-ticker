@@ -400,37 +400,56 @@ def main():
     global _logger
     
     parser = argparse.ArgumentParser(
-        description='utility for scheduling Postgresql jobs'
+        description='utility for scheduling Postgresql jobs',
+    )
+    
+    parser.add_argument(
+        '--check-config-only',
+        action='store_true',
+        help='do nothing. read and check config only',
+    )
+    
+    parser.add_argument(
+        '--not-use-sd-notify',
+        action='store_true',
+        help='not use sd_notify',
     )
     
     parser.add_argument(
         '--log-config',
-        metavar='LOG-CONFIG-PATH',
-        help='path to log config file'
+        metavar='LOG_CONFIG_PATH',
+        help='path to log config file',
     )
     
     parser.add_argument(
         'config',
-        metavar='CONFIG-PATH',
-        help='path to config file'
+        metavar='CONFIG_PATH',
+        help='path to config file',
     )
     
     args = parser.parse_args()
     
+    check_config_only = args.check_config_only
+    not_use_sd_notify = args.not_use_sd_notify
+    log_config_path = args.log_config
+    config_path = args.config
+    
     with contextlib.ExitStack() as stack:
-        if args.log_config is not None:
-            with open(args.log_config, encoding='utf-8') as log_fd:
+        if log_config_path is not None:
+            with open(log_config_path, encoding='utf-8') as log_fd:
                 log_dict = json.load(log_fd)
             logging.config.dictConfig(log_dict)
             _logger = logging.getLogger(LOGGER_NAME)
         
-        ticker_ctx = TickerCtx()
-        
-        config_path = args.config
         config_ctx = ConfigCtx()
-        loop = asyncio.get_event_loop()
         
         blocking_read_config(config_ctx, config_path)
+        
+        if check_config_only:
+            return
+        
+        loop = asyncio.get_event_loop()
+        ticker_ctx = TickerCtx()
         
         ticker_init_fut = loop.create_task(
             ticker_init(loop, ticker_ctx, config_path, config_ctx),
@@ -449,7 +468,8 @@ def main():
         loop.add_signal_handler(signal.SIGTERM, shutdown_handler)
         stack.callback(loop.remove_signal_handler, signal.SIGTERM)
         
-        sd.notify('READY=1', unset_environment=True)
+        if not not_use_sd_notify:
+            sd.notify('READY=1', unset_environment=True)
         
         ticker_process_fut = loop.create_task(
             ticker_process(loop, ticker_ctx),
