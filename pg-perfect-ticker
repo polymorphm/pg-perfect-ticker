@@ -201,6 +201,7 @@ def blocking_read_config(config_ctx, config_path):
     
     config_ctx.max_workers_by_thread_pool_map = {}
     config_ctx.dsn_by_db_con_map = {}
+    config_ctx.disabled_by_task_map = {}
     config_ctx.sql_by_task_map = {}
     config_ctx.timer_by_task_map = {}
     config_ctx.thread_pool_by_task_map = {}
@@ -218,6 +219,15 @@ def blocking_read_config(config_ctx, config_path):
         value = config.get(CONFIG_SECTION, '{}.dsn'.format(db_con))
         
         config_ctx.dsn_by_db_con_map[db_con] = value
+    
+    for task in config_ctx.task_list:
+        value = config.getboolean(
+            CONFIG_SECTION,
+            '{}.disabled'.format(task),
+            fallback=False,
+            )
+        
+        config_ctx.disabled_by_task_map[task] = value
     
     for task in config_ctx.task_list:
         value = config.get(CONFIG_SECTION, '{}.sql'.format(task))
@@ -360,6 +370,9 @@ def ticker_process(loop, ticker_ctx):
     ticker_task_process_fut_list = []
     
     for task_name in ticker_ctx.config_ctx.task_list:
+        if ticker_ctx.config_ctx.disabled_by_task_map[task_name]:
+            continue
+        
         thread_pool_name = ticker_ctx.config_ctx.thread_pool_by_task_map[task_name]
         db_con_name = ticker_ctx.config_ctx.db_con_by_task_map[task_name]
         ticker_task_ctx = TickerTaskCtx()
