@@ -201,6 +201,7 @@ def blocking_read_config(config_ctx, config_path):
     
     config_ctx.max_workers_by_thread_pool_map = {}
     config_ctx.dsn_by_db_con_map = {}
+    config_ctx.log_sql_by_db_con_map = {}
     config_ctx.disabled_by_task_map = {}
     config_ctx.sql_by_task_map = {}
     config_ctx.timer_by_task_map = {}
@@ -219,6 +220,15 @@ def blocking_read_config(config_ctx, config_path):
         value = config.get(CONFIG_SECTION, '{}.dsn'.format(db_con))
         
         config_ctx.dsn_by_db_con_map[db_con] = value
+    
+    for db_con in config_ctx.db_con_list:
+        value = config.get(
+            CONFIG_SECTION,
+            '{}.log_sql'.format(db_con),
+            fallback=None,
+            )
+        
+        config_ctx.log_sql_by_db_con_map[db_con] = value
     
     for task in config_ctx.task_list:
         value = config.getboolean(
@@ -259,15 +269,72 @@ def blocking_read_config(config_ctx, config_path):
         config_ctx.db_con_by_task_map[task] = value
 
 def blocking_ticker_task_process(ticker_task_ctx):
-    with \
-            get_db_con_ctxmgr(ticker_task_ctx.db_pool, ticker_task_ctx.db_con_dsn) \
-            as con:
+    with contextlib.ExitStack() as stack:
+        if ticker_task_ctx.db_con_log_sql is not None:
+            log_con = stack.enter_context(get_db_con_ctxmgr(
+                ticker_task_ctx.db_pool,
+                ticker_task_ctx.db_con_dsn
+            ))
+            
+            assert not log_con.autocommit
+        else:
+            log_con = None
+        
+        if log_con is not None:
+            with log_con.cursor() as log_cur:
+                log_cur.execute(ticker_task_ctx.db_con_log_sql, {
+                    'log_data': json.dumps({
+                        'event': 'ticker_task_execute',
+                        'task': ticker_task_ctx.task_name,
+                        'thread_pool': ticker_task_ctx.thread_pool_name,
+                        'db_con': ticker_task_ctx.db_con_name,
+                    })
+                })
+            
+            log_con.commit()
+        
+        con = stack.enter_context(get_db_con_ctxmgr(
+            ticker_task_ctx.db_pool,
+            ticker_task_ctx.db_con_dsn
+        ))
+        
         assert not con.autocommit
         
-        with con.cursor() as cur:
-            cur.execute(ticker_task_ctx.task_sql)
-        
-        con.commit()
+        try:
+            with con.cursor() as cur:
+                cur.execute(ticker_task_ctx.task_sql)
+            
+            con.commit()
+        except (psycopg2.Warning, psycopg2.Error) as e:
+            if log_con is not None:
+                with log_con.cursor() as log_cur:
+                    log_cur.execute(ticker_task_ctx.db_con_log_sql, {
+                        'log_data': json.dumps({
+                            'event': 'ticker_task_error',
+                            'task': ticker_task_ctx.task_name,
+                            'thread_pool': ticker_task_ctx.thread_pool_name,
+                            'db_con': ticker_task_ctx.db_con_name,
+                            'exc_type': type(e),
+                            'exc_str': str(e),
+                        })
+                    })
+                
+                log_con.commit()
+            
+            raise e from e
+        else:
+            if log_con is not None:
+                with log_con.cursor() as log_cur:
+                    log_cur.execute(ticker_task_ctx.db_con_log_sql, {
+                        'log_data': json.dumps({
+                            'event': 'ticker_task_no_error',
+                            'task': ticker_task_ctx.task_name,
+                            'thread_pool': ticker_task_ctx.thread_pool_name,
+                            'db_con': ticker_task_ctx.db_con_name,
+                        })
+                    })
+                
+                log_con.commit()
 
 @asyncio.coroutine
 def ticker_task_process(loop, ticker_task_ctx):
@@ -382,6 +449,7 @@ def ticker_process(loop, ticker_ctx):
         ticker_task_ctx.db_con_name = db_con_name
         ticker_task_ctx.thread_pool_max_workers = ticker_ctx.config_ctx.max_workers_by_thread_pool_map[thread_pool_name]
         ticker_task_ctx.db_con_dsn = ticker_ctx.config_ctx.dsn_by_db_con_map[db_con_name]
+        ticker_task_ctx.db_con_log_sql = ticker_ctx.config_ctx.log_sql_by_db_con_map[db_con_name]
         ticker_task_ctx.task_sql = ticker_ctx.config_ctx.sql_by_task_map[task_name]
         ticker_task_ctx.task_timer = ticker_ctx.config_ctx.timer_by_task_map[task_name]
         ticker_task_ctx.thread_pool = ticker_ctx.thread_pool_by_thread_pool_name[thread_pool_name]
