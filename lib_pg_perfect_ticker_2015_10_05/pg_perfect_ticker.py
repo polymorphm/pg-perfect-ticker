@@ -185,10 +185,10 @@ def blocking_ticker_task_process(ticker_task_ctx):
             assert not con.autocommit
             
             if ticker_task_ctx.task_sql is not None:
+                con.autocommit = True
+                
                 with con.cursor() as cur:
                     cur.execute(ticker_task_ctx.task_sql)
-                
-                con.commit()
             elif ticker_task_ctx.task_script_exe is not None:
                 exec(ticker_task_ctx.task_script_exe, {}, {
                     'stack': stack,
