@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # -*- mode: python; coding: utf-8 -*-
 #
 # Copyright (c) 2015 Andrej Antonov <polymorphm@gmail.com>
@@ -21,9 +20,42 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 # THE SOFTWARE.
 
-assert str is not bytes, 'deep deep deep obsolete version of python'
+assert str is not bytes
 
-from lib_pg_perfect_ticker_2015_10_05 import main
+import sys
+import logging, logging.config
+import json
 
-if __name__ == '__main__':
-    main.main()
+LOGGER_NAME = 'pg-perfect-ticker'
+
+_logger = None
+
+def try_print(*args, **kwargs):
+    try:
+        return print(*args, **kwargs)
+    except OSError:
+        pass
+
+def log(level, msg):
+    global _logger
+    
+    if _logger is not None:
+        _logger.log(level, msg)
+        
+        return
+    
+    if level >= logging.WARNING:
+        try_print(msg, file=sys.stderr)
+        
+        return
+    
+    try_print(msg)
+
+def init(log_config_path):
+    global _logger
+    
+    if log_config_path is not None:
+        with open(log_config_path, encoding='utf-8') as log_fd:
+            log_dict = json.load(log_fd)
+        logging.config.dictConfig(log_dict)
+        _logger = logging.getLogger(LOGGER_NAME)

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # -*- mode: python; coding: utf-8 -*-
 #
 # Copyright (c) 2015 Andrej Antonov <polymorphm@gmail.com>
@@ -21,9 +20,39 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 # THE SOFTWARE.
 
-assert str is not bytes, 'deep deep deep obsolete version of python'
+assert str is not bytes
 
-from lib_pg_perfect_ticker_2015_10_05 import main
+try:
+    import systemd.daemon as sd
+except ImportError:
+    import os
+    import socket
+    
+    class _SdModule:
+        def notify(self, status, unset_environment=False):
+            assert isinstance(status, str)
+            assert isinstance(unset_environment, bool)
+            
+            notify_socket = os.environ.get('NOTIFY_SOCKET')
+            
+            if not notify_socket:
+                return False
+            
+            if notify_socket.startswith('@'):
+                notify_socket = '\0{}'.format(notify_socket[1:])
+            try:
+                with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as sock:
+                    sock.connect(notify_socket)
+                    sock.sendall(status.encode())
+            except OSError:
+                return False
+            finally:
+                if unset_environment:
+                    del os.environ['NOTIFY_SOCKET']
+            
+            return True
+    
+    sd = _SdModule()
 
-if __name__ == '__main__':
-    main.main()
+def notify(*args, **kwargs):
+    return sd.notify(*args, **kwargs)
