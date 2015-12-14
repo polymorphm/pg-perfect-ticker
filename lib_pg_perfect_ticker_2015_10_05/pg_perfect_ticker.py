@@ -23,6 +23,7 @@
 assert str is not bytes
 
 import configparser
+import os, os.path
 import logging
 import json
 import psycopg2
@@ -68,6 +69,8 @@ def blocking_read_config(config_ctx, config_path):
     config_ctx.log_sql_by_db_con_map = {}
     config_ctx.disabled_by_task_map = {}
     config_ctx.sql_by_task_map = {}
+    config_ctx.script_by_task_map = {}
+    config_ctx.script_exe_by_task_map = {}
     config_ctx.timer_by_task_map = {}
     config_ctx.thread_pool_by_task_map = {}
     config_ctx.db_con_by_task_map = {}
@@ -81,63 +84,79 @@ def blocking_read_config(config_ctx, config_path):
         config_ctx.max_workers_by_thread_pool_map[thread_pool] = value
     
     for db_con in config_ctx.db_con_list:
-        value = config.get(CONFIG_SECTION, '{}.dsn'.format(db_con))
-        
-        config_ctx.dsn_by_db_con_map[db_con] = value
-    
-    for db_con in config_ctx.db_con_list:
-        value = config.get(
+        dsn_value = config.get(CONFIG_SECTION, '{}.dsn'.format(db_con))
+        log_sql_value = config.get(
             CONFIG_SECTION,
             '{}.log_sql'.format(db_con),
             fallback=None,
-            )
+        )
         
-        config_ctx.log_sql_by_db_con_map[db_con] = value
+        config_ctx.dsn_by_db_con_map[db_con] = dsn_value
+        config_ctx.log_sql_by_db_con_map[db_con] = log_sql_value
     
     for task in config_ctx.task_list:
-        value = config.getboolean(
+        disabled_value = config.getboolean(
             CONFIG_SECTION,
             '{}.disabled'.format(task),
             fallback=False,
+        )
+        sql_value = config.get(
+            CONFIG_SECTION,
+            '{}.sql'.format(task),
+            fallback=None,
+        )
+        script_value = config.get(
+            CONFIG_SECTION,
+            '{}.script'.format(task),
+            fallback=None,
+        )
+        timer_value = config.getfloat(CONFIG_SECTION, '{}.timer'.format(task))
+        thread_pool_value = config.get(CONFIG_SECTION, '{}.thread_pool'.format(task))
+        db_con_value = config.get(CONFIG_SECTION, '{}.db_con'.format(task))
+        
+        if \
+                (sql_value is not None) + \
+                (script_value is not None) != 1:
+            raise ConfigError('invalid value of {{sql, script}} params: {{{!r}, {!r}}}'.format(
+                sql_value,
+                script_value,
+            ))
+        
+        if timer_value <= 0:
+            raise ConfigError('invalid value of timer param: {!r}'.format(timer_value))
+        
+        if thread_pool_value not in config_ctx.thread_pool_list:
+            raise ConfigError('invalid value of thread_pool param: {!r}'.format(thread_pool_value))
+        
+        if db_con_value not in config_ctx.db_con_list:
+            raise ConfigError('invalid value of db_con param: {!r}'.format(db_con_value))
+        
+        if script_value is not None:
+            filename = os.path.join(
+                os.path.dirname(config_path),
+                script_value,
             )
+            with open(filename, encoding='utf-8') as source_fd:
+                source = source_fd.read()
+            
+            script_exe_value = compile(source, filename, 'exec')
+        else:
+            script_exe_value = None
         
-        config_ctx.disabled_by_task_map[task] = value
-    
-    for task in config_ctx.task_list:
-        value = config.get(CONFIG_SECTION, '{}.sql'.format(task))
-        
-        config_ctx.sql_by_task_map[task] = value
-    
-    for task in config_ctx.task_list:
-        value = config.getfloat(CONFIG_SECTION, '{}.timer'.format(task))
-        
-        if value <= 0:
-            raise ConfigError('invalid value of timer param: {!r}'.format(value))
-        
-        config_ctx.timer_by_task_map[task] = value
-    
-    for task in config_ctx.task_list:
-        value = config.get(CONFIG_SECTION, '{}.thread_pool'.format(task))
-        
-        if value not in config_ctx.thread_pool_list:
-            raise ConfigError('invalid value of thread_pool param: {!r}'.format(value))
-        
-        config_ctx.thread_pool_by_task_map[task] = value
-    
-    for task in config_ctx.task_list:
-        value = config.get(CONFIG_SECTION, '{}.db_con'.format(task))
-        
-        if value not in config_ctx.db_con_list:
-            raise ConfigError('invalid value of db_con param: {!r}'.format(value))
-        
-        config_ctx.db_con_by_task_map[task] = value
+        config_ctx.disabled_by_task_map[task] = disabled_value
+        config_ctx.sql_by_task_map[task] = sql_value
+        config_ctx.script_by_task_map[task] = script_value
+        config_ctx.timer_by_task_map[task] = timer_value
+        config_ctx.thread_pool_by_task_map[task] = thread_pool_value
+        config_ctx.db_con_by_task_map[task] = db_con_value
+        config_ctx.script_exe_by_task_map[task] = script_exe_value
 
 def blocking_ticker_task_process(ticker_task_ctx):
     with contextlib.ExitStack() as stack:
         if ticker_task_ctx.db_con_log_sql is not None:
             log_con = stack.enter_context(simple_db_pool.get_db_con_ctxmgr(
                 ticker_task_ctx.db_pool,
-                ticker_task_ctx.db_con_dsn
+                ticker_task_ctx.db_con_dsn,
             ))
             
             assert not log_con.autocommit
@@ -157,19 +176,28 @@ def blocking_ticker_task_process(ticker_task_ctx):
             
             log_con.commit()
         
-        con = stack.enter_context(simple_db_pool.get_db_con_ctxmgr(
-            ticker_task_ctx.db_pool,
-            ticker_task_ctx.db_con_dsn
-        ))
-        
-        assert not con.autocommit
-        
         try:
-            with con.cursor() as cur:
-                cur.execute(ticker_task_ctx.task_sql)
+            con = stack.enter_context(simple_db_pool.get_db_con_ctxmgr(
+                ticker_task_ctx.db_pool,
+                ticker_task_ctx.db_con_dsn,
+            ))
             
-            con.commit()
-        except (psycopg2.Warning, psycopg2.Error) as e:
+            assert not con.autocommit
+            
+            if ticker_task_ctx.task_sql is not None:
+                with con.cursor() as cur:
+                    cur.execute(ticker_task_ctx.task_sql)
+                
+                con.commit()
+            elif ticker_task_ctx.task_script_exe is not None:
+                exec(ticker_task_ctx.task_script_exe, {}, {
+                    'stack': stack,
+                    'ticker_task_ctx': ticker_task_ctx,
+                    'con': con,
+                })
+            else:
+                raise NotImplementedError
+        except Exception as e:
             if log_con is not None:
                 with log_con.cursor() as log_cur:
                     log_cur.execute(ticker_task_ctx.db_con_log_sql, {
@@ -315,9 +343,11 @@ def ticker_process(loop, ticker_ctx):
         ticker_task_ctx.db_con_dsn = ticker_ctx.config_ctx.dsn_by_db_con_map[db_con_name]
         ticker_task_ctx.db_con_log_sql = ticker_ctx.config_ctx.log_sql_by_db_con_map[db_con_name]
         ticker_task_ctx.task_sql = ticker_ctx.config_ctx.sql_by_task_map[task_name]
+        ticker_task_ctx.task_script = ticker_ctx.config_ctx.script_by_task_map[task_name]
         ticker_task_ctx.task_timer = ticker_ctx.config_ctx.timer_by_task_map[task_name]
         ticker_task_ctx.thread_pool = ticker_ctx.thread_pool_by_thread_pool_name[thread_pool_name]
         ticker_task_ctx.db_pool = ticker_ctx.db_pool
+        ticker_task_ctx.task_script_exe = ticker_ctx.config_ctx.script_exe_by_task_map[task_name]
         
         ticker_task_process_fut = loop.create_task(
             ticker_task_process(loop, ticker_task_ctx),
