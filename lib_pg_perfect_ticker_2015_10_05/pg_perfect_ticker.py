@@ -228,8 +228,7 @@ def blocking_ticker_task_process(ticker_task_ctx):
                 
                 log_con.commit()
 
-@asyncio.coroutine
-def ticker_task_process(loop, ticker_task_ctx):
+async def ticker_task_process(loop, ticker_task_ctx):
     try:
         log.log(logging.INFO, 'ticker task ({!r}, {!r}, {!r}): enter'.format(
             ticker_task_ctx.task_name,
@@ -253,7 +252,7 @@ def ticker_task_process(loop, ticker_task_ctx):
                 ticker_task_ctx,
             )
             
-            yield from asyncio.wait((exe_fut,), loop=loop)
+            await asyncio.wait((exe_fut,), loop=loop)
             
             if exe_fut.done() and exe_fut.exception():
                 exc_type = type(exe_fut.exception())
@@ -286,7 +285,7 @@ def ticker_task_process(loop, ticker_task_ctx):
                     fixed_timer,
                 ))
                 
-                yield from asyncio.sleep(fixed_timer, loop=loop)
+                await asyncio.sleep(fixed_timer, loop=loop)
             else:
                 log.log(logging.INFO, 'ticker task ({!r}, {!r}, {!r}): no sleep'.format(
                     ticker_task_ctx.task_name,
@@ -300,8 +299,7 @@ def ticker_task_process(loop, ticker_task_ctx):
             ticker_task_ctx.db_con_name,
         ))
 
-@asyncio.coroutine
-def ticker_init(loop, ticker_ctx, config_path, config_ctx):
+async def ticker_init(loop, ticker_ctx, config_path, config_ctx):
     log.log(logging.INFO, 'ticker init: begin')
     
     ticker_ctx.config_path = config_path
@@ -320,12 +318,10 @@ def ticker_init(loop, ticker_ctx, config_path, config_ctx):
     
     log.log(logging.INFO, 'ticker init: done')
 
-@asyncio.coroutine
-def ticker_shutdown_handler(loop, ticker_ctx):
+async def ticker_shutdown_handler(loop, ticker_ctx):
     ticker_ctx.shutdown_event.set()
 
-@asyncio.coroutine
-def ticker_process(loop, ticker_ctx):
+async def ticker_process(loop, ticker_ctx):
     ticker_task_process_fut_list = []
     
     for task_name in ticker_ctx.config_ctx.task_list:
@@ -356,7 +352,7 @@ def ticker_process(loop, ticker_ctx):
         ticker_task_process_fut_list.append(ticker_task_process_fut)
     
     try:
-        yield from ticker_ctx.shutdown_event.wait()
+        await ticker_ctx.shutdown_event.wait()
     finally:
         for ticker_task_process_fut in ticker_task_process_fut_list:
             ticker_task_process_fut.cancel()
