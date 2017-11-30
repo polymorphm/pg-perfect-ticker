@@ -1,6 +1,6 @@
 # -*- mode: python; coding: utf-8 -*-
 #
-# Copyright (c) 2015, 2016 Andrei Antonov <polymorphm@gmail.com>
+# Copyright (c) 2015, 2016, 2017 Andrei Antonov <polymorphm@gmail.com>
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -70,6 +70,7 @@ def blocking_read_config(config_ctx, config_path):
     config_ctx.disabled_by_task_map = {}
     config_ctx.sql_by_task_map = {}
     config_ctx.script_by_task_map = {}
+    config_ctx.script_arg_by_task_map = {}
     config_ctx.script_exe_by_task_map = {}
     config_ctx.timer_by_task_map = {}
     config_ctx.thread_pool_by_task_map = {}
@@ -110,6 +111,11 @@ def blocking_read_config(config_ctx, config_path):
             '{}.script'.format(task),
             fallback=None,
         )
+        script_arg_value = config.get(
+            CONFIG_SECTION,
+            '{}.script_arg'.format(task),
+            fallback=None,
+        )
         timer_value = config.getfloat(CONFIG_SECTION, '{}.timer'.format(task))
         thread_pool_value = config.get(CONFIG_SECTION, '{}.thread_pool'.format(task))
         db_con_value = config.get(CONFIG_SECTION, '{}.db_con'.format(task))
@@ -146,6 +152,7 @@ def blocking_read_config(config_ctx, config_path):
         config_ctx.disabled_by_task_map[task] = disabled_value
         config_ctx.sql_by_task_map[task] = sql_value
         config_ctx.script_by_task_map[task] = script_value
+        config_ctx.script_arg_by_task_map[task] = script_arg_value
         config_ctx.timer_by_task_map[task] = timer_value
         config_ctx.thread_pool_by_task_map[task] = thread_pool_value
         config_ctx.db_con_by_task_map[task] = db_con_value
@@ -340,6 +347,7 @@ async def ticker_process(loop, ticker_ctx):
         ticker_task_ctx.db_con_log_sql = ticker_ctx.config_ctx.log_sql_by_db_con_map[db_con_name]
         ticker_task_ctx.task_sql = ticker_ctx.config_ctx.sql_by_task_map[task_name]
         ticker_task_ctx.task_script = ticker_ctx.config_ctx.script_by_task_map[task_name]
+        ticker_task_ctx.task_script_arg = ticker_ctx.config_ctx.script_arg_by_task_map[task_name]
         ticker_task_ctx.task_timer = ticker_ctx.config_ctx.timer_by_task_map[task_name]
         ticker_task_ctx.thread_pool = ticker_ctx.thread_pool_by_thread_pool_name[thread_pool_name]
         ticker_task_ctx.db_pool = ticker_ctx.db_pool
