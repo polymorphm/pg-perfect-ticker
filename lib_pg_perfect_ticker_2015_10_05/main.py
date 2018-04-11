@@ -56,6 +56,7 @@ def main():
     
     parser.add_argument(
         'config',
+        nargs='+',
         metavar='CONFIG_PATH',
         help='path to config file',
     )
@@ -65,14 +66,14 @@ def main():
     check_config_only = args.check_config_only
     not_use_sd_notify = args.not_use_sd_notify
     log_config_path = args.log_config
-    config_path = args.config
+    config_path_list = args.config
     
     with contextlib.ExitStack() as stack:
         log.init(log_config_path)
         
         config_ctx = pg_perfect_ticker.ConfigCtx()
         
-        pg_perfect_ticker.blocking_read_config(config_ctx, config_path)
+        pg_perfect_ticker.blocking_read_config(config_ctx, config_path_list)
         
         if check_config_only:
             return
@@ -81,7 +82,7 @@ def main():
         ticker_ctx = pg_perfect_ticker.TickerCtx()
         
         ticker_init_fut = loop.create_task(
-            pg_perfect_ticker.ticker_init(loop, ticker_ctx, config_path, config_ctx),
+            pg_perfect_ticker.ticker_init(loop, ticker_ctx, config_path_list, config_ctx),
         )
         
         loop.run_until_complete(ticker_init_fut)

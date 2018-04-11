@@ -49,12 +49,13 @@ class TickerCtx:
 class TickerTaskCtx:
     pass
 
-def blocking_read_config(config_ctx, config_path):
+def blocking_read_config(config_ctx, config_path_list):
     config = configparser.ConfigParser(
         interpolation=configparser.ExtendedInterpolation(),
     )
     
-    config.read(config_path, encoding='utf-8')
+    for config_path in config_path_list:
+        config.read(config_path, encoding='utf-8')
     
     thread_pool_list_str = config.get(CONFIG_SECTION, 'thread_pool_list')
     db_con_list_str = config.get(CONFIG_SECTION, 'db_con_list')
@@ -306,10 +307,10 @@ async def ticker_task_process(loop, ticker_task_ctx):
             ticker_task_ctx.db_con_name,
         ))
 
-async def ticker_init(loop, ticker_ctx, config_path, config_ctx):
+async def ticker_init(loop, ticker_ctx, config_path_list, config_ctx):
     log.log(logging.INFO, 'ticker init: begin')
     
-    ticker_ctx.config_path = config_path
+    ticker_ctx.config_path_list = config_path_list
     ticker_ctx.config_ctx = config_ctx
     ticker_ctx.shutdown_event = asyncio.Event(loop=loop)
     ticker_ctx.db_pool = simple_db_pool.SimpleDbPool()
