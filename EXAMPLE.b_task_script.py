@@ -1,7 +1,7 @@
 # -*- mode: python; coding: utf-8 -*-
 
 import shlex
-from lib_pg_perfect_ticker_2015_10_05 import simple_db_pool
+from lib_pg_perfect_ticker import simple_db_pool
 
 arg_list = shlex.split(ticker_task_ctx.task_script_arg)
 

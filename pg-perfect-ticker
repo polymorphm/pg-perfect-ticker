@@ -1,7 +1,7 @@
 #!/usr/bin/python
 # -*- mode: python; coding: utf-8 -*-
 
-from lib_pg_perfect_ticker_2015_10_05 import main
+from lib_pg_perfect_ticker import main
 
 if __name__ == '__main__':
     main.main()
