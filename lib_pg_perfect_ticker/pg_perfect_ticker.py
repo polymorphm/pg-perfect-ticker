@@ -137,7 +137,7 @@ def blocking_read_config(config_ctx, config_path_list):
         config_ctx.db_con_by_task_map[task] = db_con_value
         config_ctx.script_exe_by_task_map[task] = script_exe_value
 
-def blocking_ticker_task_process(ticker_task_ctx):
+def blocking_ticker_task_process(ticker_task_ctx, awake_task_func):
     with contextlib.ExitStack() as stack:
         if ticker_task_ctx.db_con_log_sql is not None:
             log_con = stack.enter_context(simple_db_pool.get_db_con_ctxmgr(
@@ -180,6 +180,7 @@ def blocking_ticker_task_process(ticker_task_ctx):
                     'stack': stack,
                     'ticker_task_ctx': ticker_task_ctx,
                     'con': con,
+                    'awake_task': awake_task_func,
                 })
             else:
                 raise NotImplementedError
@@ -214,7 +215,7 @@ def blocking_ticker_task_process(ticker_task_ctx):
                 
                 log_con.commit()
 
-async def ticker_task_process(loop, ticker_task_ctx):
+async def ticker_task_process(loop, ticker_task_ctx, awake_event, awake_event_map):
     try:
         log.log(logging.INFO, 'ticker task ({!r}, {!r}, {!r}): enter'.format(
             ticker_task_ctx.task_name,
@@ -232,10 +233,23 @@ async def ticker_task_process(loop, ticker_task_ctx):
                 ticker_task_ctx.db_con_name,
             ))
             
+            awake_event.clear()
+            
+            def awake_task_func(task_name):
+                task_awake_event = awake_event_map.get(task_name)
+                
+                if task_awake_event is None:
+                    return False
+                
+                loop.call_soon_threadsafe(task_awake_event.set)
+                
+                return True
+            
             exe_fut = loop.run_in_executor(
                 ticker_task_ctx.thread_pool,
                 blocking_ticker_task_process,
                 ticker_task_ctx,
+                awake_task_func,
             )
             
             await asyncio.wait((exe_fut,), loop=loop)
@@ -271,7 +285,12 @@ async def ticker_task_process(loop, ticker_task_ctx):
                     fixed_timer,
                 ))
                 
-                await asyncio.sleep(fixed_timer, loop=loop)
+                timer_handle = loop.call_later(fixed_timer, awake_event.set)
+                
+                try:
+                    await awake_event.wait()
+                finally:
+                    timer_handle.cancel()
             else:
                 log.log(logging.INFO, 'ticker task ({!r}, {!r}, {!r}): no sleep'.format(
                     ticker_task_ctx.task_name,
@@ -308,6 +327,7 @@ async def ticker_shutdown_handler(loop, ticker_ctx):
     ticker_ctx.shutdown_event.set()
 
 async def ticker_process(loop, ticker_ctx):
+    awake_event_map = {}
     ticker_task_process_fut_list = []
     
     for task_name in ticker_ctx.config_ctx.task_list:
@@ -332,8 +352,11 @@ async def ticker_process(loop, ticker_ctx):
         ticker_task_ctx.db_pool = ticker_ctx.db_pool
         ticker_task_ctx.task_script_exe = ticker_ctx.config_ctx.script_exe_by_task_map[task_name]
         
+        awake_event = asyncio.Event()
+        awake_event_map[task_name] = awake_event
+        
         ticker_task_process_fut = loop.create_task(
-            ticker_task_process(loop, ticker_task_ctx),
+            ticker_task_process(loop, ticker_task_ctx, awake_event, awake_event_map),
         )
         
         ticker_task_process_fut_list.append(ticker_task_process_fut)

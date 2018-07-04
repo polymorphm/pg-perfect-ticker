@@ -20,6 +20,9 @@ try:
         })
     
     con.commit()
+    
+    # and we awakening another task, right now
+    awake_task('example_task_a')
 finally:
     with second_con.cursor() as cur:
         cur.execute('select \'some value; \' || %(b)s || \' \' || %(d)s', {
