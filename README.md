@@ -7,4 +7,4 @@ Utility for scheduling Postgresql jobs.
 Status
 ------
 
-Developer version (git master branch).
+``pg-perfect-ticker-7.0.0`` release.
