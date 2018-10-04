@@ -1,6 +1,8 @@
 # -*- mode: python; coding: utf-8 -*-
 
+import logging
 import shlex
+from lib_pg_perfect_ticker import log
 from lib_pg_perfect_ticker import simple_db_pool
 
 arg_list = shlex.split(ticker_task_ctx.task_script_arg)
@@ -13,8 +15,15 @@ second_con = stack.enter_context(simple_db_pool.get_db_con_ctxmgr(
 ))
 
 try:
+    log.log(logging.INFO, 'ticker task ({!r}, {!r}, {!r}): {}'.format(
+        ticker_task_ctx.task_name,
+        ticker_task_ctx.thread_pool_name,
+        ticker_task_ctx.db_con_name,
+        '*** HELLO FROM TASK SCRIPT {!r} ***'.format(ticker_task_ctx.task_script_file)
+    ))
+    
     with con.cursor() as cur:
-        cur.execute('select 345.0 + %(a)s  + %(c)s', {
+        cur.execute('select 345.0 + %(a)s + %(c)s', {
             'a': arg_list[0],
             'c': arg_list[2],
         })
