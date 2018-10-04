@@ -9,6 +9,7 @@ import contextlib
 import asyncio
 import concurrent.futures
 import time
+import traceback
 
 from . import log
 from . import simple_db_pool
@@ -137,7 +138,11 @@ def blocking_read_config(config_ctx, config_path_list):
         config_ctx.db_con_by_task_map[task] = db_con_value
         config_ctx.script_exe_by_task_map[task] = script_exe_value
 
-def blocking_ticker_task_process(ticker_task_ctx, awake_task_func):
+def blocking_ticker_task_process(
+            ticker_task_ctx,
+            awake_task_func,
+            set_exc_tb_func,
+        ):
     with contextlib.ExitStack() as stack:
         if ticker_task_ctx.db_con_log_sql is not None:
             log_con = stack.enter_context(simple_db_pool.get_db_con_ctxmgr(
@@ -162,6 +167,8 @@ def blocking_ticker_task_process(ticker_task_ctx, awake_task_func):
             
             log_con.commit()
         
+        exc_tb = None
+        
         try:
             con = stack.enter_context(simple_db_pool.get_db_con_ctxmgr(
                 ticker_task_ctx.db_pool,
@@ -176,12 +183,19 @@ def blocking_ticker_task_process(ticker_task_ctx, awake_task_func):
                 with con.cursor() as cur:
                     cur.execute(ticker_task_ctx.task_sql)
             elif ticker_task_ctx.task_script_exe is not None:
-                exec(ticker_task_ctx.task_script_exe, {}, {
-                    'stack': stack,
-                    'ticker_task_ctx': ticker_task_ctx,
-                    'con': con,
-                    'awake_task': awake_task_func,
-                })
+                try:
+                    exec(ticker_task_ctx.task_script_exe, {}, {
+                        'stack': stack,
+                        'ticker_task_ctx': ticker_task_ctx,
+                        'con': con,
+                        'awake_task': awake_task_func,
+                    })
+                except Exception as e:
+                    exc_tb = traceback.format_exc()
+                    
+                    set_exc_tb_func(exc_tb)
+                    
+                    raise e from e
             else:
                 raise NotImplementedError
         except Exception as e:
@@ -195,6 +209,7 @@ def blocking_ticker_task_process(ticker_task_ctx, awake_task_func):
                             'db_con': ticker_task_ctx.db_con_name,
                             'exc_type': type(e),
                             'exc_str': str(e),
+                            'exc_tb': exc_tb,
                         })
                     })
                 
@@ -245,11 +260,19 @@ async def ticker_task_process(loop, ticker_task_ctx, awake_event, awake_event_ma
                 
                 return True
             
+            exc_tb = None
+            
+            def set_exc_tb_func(tb):
+                nonlocal exc_tb
+                
+                exc_tb = tb
+            
             exe_fut = loop.run_in_executor(
                 ticker_task_ctx.thread_pool,
                 blocking_ticker_task_process,
                 ticker_task_ctx,
                 awake_task_func,
+                set_exc_tb_func,
             )
             
             await asyncio.wait((exe_fut,), loop=loop)
@@ -258,13 +281,22 @@ async def ticker_task_process(loop, ticker_task_ctx, awake_event, awake_event_ma
                 exc_type = type(exe_fut.exception())
                 exc_str = str(exe_fut.exception())
                 
-                log.log(logging.WARNING, 'ticker task ({!r}, {!r}, {!r}): error {!r}: {}'.format(
-                    ticker_task_ctx.task_name,
-                    ticker_task_ctx.thread_pool_name,
-                    ticker_task_ctx.db_con_name,
-                    exc_type,
-                    exc_str,
-                ))
+                if exc_tb is not None:
+                    msg_tail = '\n{}'.format(exc_tb.rstrip())
+                else:
+                    msg_tail = ''
+                
+                log.log(
+                    logging.WARNING,
+                    'ticker task ({!r}, {!r}, {!r}): error {!r}: {}{}'.format(
+                        ticker_task_ctx.task_name,
+                        ticker_task_ctx.thread_pool_name,
+                        ticker_task_ctx.db_con_name,
+                        exc_type,
+                        exc_str,
+                        msg_tail,
+                    )
+                )
             
             exe_stop_time = time.monotonic()
             fixed_timer = timer - (exe_stop_time - exe_start_time)
