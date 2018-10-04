@@ -210,7 +210,7 @@ def blocking_ticker_task_process(
                             'task': ticker_task_ctx.task_name,
                             'thread_pool': ticker_task_ctx.thread_pool_name,
                             'db_con': ticker_task_ctx.db_con_name,
-                            'exc_type': type(e),
+                            'exc_type': str(type(e)),
                             'exc_str': str(e),
                             'exc_tb': exc_tb,
                         })
