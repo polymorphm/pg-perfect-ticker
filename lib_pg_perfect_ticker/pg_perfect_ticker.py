@@ -51,6 +51,7 @@ def blocking_read_config(config_ctx, config_path_list):
     config_ctx.sql_by_task_map = {}
     config_ctx.script_by_task_map = {}
     config_ctx.script_arg_by_task_map = {}
+    config_ctx.script_file_by_task_map = {}
     config_ctx.script_exe_by_task_map = {}
     config_ctx.timer_by_task_map = {}
     config_ctx.thread_pool_by_task_map = {}
@@ -118,15 +119,16 @@ def blocking_read_config(config_ctx, config_path_list):
             raise ConfigError('invalid value of db_con param: {!r}'.format(db_con_value))
         
         if script_value is not None:
-            filename = os.path.join(
+            script_file_value = os.path.join(
                 os.path.dirname(config_path),
                 script_value,
             )
-            with open(filename, encoding='utf-8') as source_fd:
+            with open(script_file_value, encoding='utf-8') as source_fd:
                 source = source_fd.read()
             
-            script_exe_value = compile(source, filename, 'exec')
+            script_exe_value = compile(source, script_file_value, 'exec')
         else:
+            script_file_value = None
             script_exe_value = None
         
         config_ctx.disabled_by_task_map[task] = disabled_value
@@ -136,6 +138,7 @@ def blocking_read_config(config_ctx, config_path_list):
         config_ctx.timer_by_task_map[task] = timer_value
         config_ctx.thread_pool_by_task_map[task] = thread_pool_value
         config_ctx.db_con_by_task_map[task] = db_con_value
+        config_ctx.script_file_by_task_map[task] = script_file_value
         config_ctx.script_exe_by_task_map[task] = script_exe_value
 
 def blocking_ticker_task_process(
@@ -184,7 +187,7 @@ def blocking_ticker_task_process(
                     cur.execute(ticker_task_ctx.task_sql)
             elif ticker_task_ctx.task_script_exe is not None:
                 try:
-                    exec(ticker_task_ctx.task_script_exe, {}, {
+                    exec(ticker_task_ctx.task_script_exe, None, {
                         'stack': stack,
                         'ticker_task_ctx': ticker_task_ctx,
                         'con': con,
@@ -382,6 +385,7 @@ async def ticker_process(loop, ticker_ctx):
         ticker_task_ctx.task_timer = ticker_ctx.config_ctx.timer_by_task_map[task_name]
         ticker_task_ctx.thread_pool = ticker_ctx.thread_pool_by_thread_pool_name[thread_pool_name]
         ticker_task_ctx.db_pool = ticker_ctx.db_pool
+        ticker_task_ctx.task_script_file = ticker_ctx.config_ctx.script_file_by_task_map[task_name]
         ticker_task_ctx.task_script_exe = ticker_ctx.config_ctx.script_exe_by_task_map[task_name]
         
         awake_event = asyncio.Event()
