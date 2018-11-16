@@ -6,6 +6,7 @@ After=network.target postgresql.service
 Type=notify
 Environment=PYTHONPATH=/path/to/python-lib
 ExecStart=/usr/bin/python -u -- /path/to/utility/pg-perfect-ticker --log-config=/path/to/logging.json -- /path/to/config/pg-perfect-ticker.cfg
+#ExecStart=/usr/bin/python -u -- /path/to/utility/pg-perfect-ticker --log-config=/path/to/logging.json -- /path/to/config/DEFAULT.pg-perfect-ticker.cfg /path/to/config/OVERRIDE.pg-perfect-ticker.cfg
 Restart=on-failure
 
 [Install]
