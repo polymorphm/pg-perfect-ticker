@@ -9,6 +9,7 @@ import contextlib
 import asyncio
 import concurrent.futures
 import time
+import math
 import traceback
 
 from . import log
@@ -53,6 +54,7 @@ def blocking_read_config(config_ctx, config_path_list):
     config_ctx.script_arg_by_task_map = {}
     config_ctx.script_file_by_task_map = {}
     config_ctx.script_exe_by_task_map = {}
+    config_ctx.stmt_timeout_by_task_map = {}
     config_ctx.timer_by_task_map = {}
     config_ctx.thread_pool_by_task_map = {}
     config_ctx.db_con_by_task_map = {}
@@ -97,6 +99,11 @@ def blocking_read_config(config_ctx, config_path_list):
             '{}.script_arg'.format(task),
             fallback=None,
         )
+        stmt_timeout_value = config.getfloat(
+            CONFIG_SECTION,
+            '{}.stmt_timeout'.format(task),
+            fallback=None,
+        )
         timer_value = config.getfloat(CONFIG_SECTION, '{}.timer'.format(task))
         thread_pool_value = config.get(CONFIG_SECTION, '{}.thread_pool'.format(task))
         db_con_value = config.get(CONFIG_SECTION, '{}.db_con'.format(task))
@@ -108,6 +115,13 @@ def blocking_read_config(config_ctx, config_path_list):
                 sql_value,
                 script_value,
             ))
+        
+        if stmt_timeout_value is not None and stmt_timeout_value <= 0:
+            raise ConfigError(
+                'invalid value of stmt_timeout param: {!r}'.format(
+                    stmt_timeout_value,
+                ),
+            )
         
         if timer_value <= 0:
             raise ConfigError('invalid value of timer param: {!r}'.format(timer_value))
@@ -135,6 +149,7 @@ def blocking_read_config(config_ctx, config_path_list):
         config_ctx.sql_by_task_map[task] = sql_value
         config_ctx.script_by_task_map[task] = script_value
         config_ctx.script_arg_by_task_map[task] = script_arg_value
+        config_ctx.stmt_timeout_by_task_map[task] = stmt_timeout_value
         config_ctx.timer_by_task_map[task] = timer_value
         config_ctx.thread_pool_by_task_map[task] = thread_pool_value
         config_ctx.db_con_by_task_map[task] = db_con_value
@@ -179,6 +194,19 @@ def blocking_ticker_task_process(
             ))
             
             assert not con.autocommit
+            
+            if ticker_task_ctx.task_stmt_timeout is not None:
+                with con.cursor() as cur:
+                    cur.execute(
+                        'set statement_timeout to %(statement_timeout)s',
+                        {
+                            'statement_timeout': math.ceil(
+                                ticker_task_ctx.task_stmt_timeout * 1000,
+                            ),
+                        },
+                    )
+                
+                con.commit()
             
             if ticker_task_ctx.task_sql is not None:
                 con.autocommit = True
@@ -382,6 +410,7 @@ async def ticker_process(loop, ticker_ctx):
         ticker_task_ctx.task_sql = ticker_ctx.config_ctx.sql_by_task_map[task_name]
         ticker_task_ctx.task_script = ticker_ctx.config_ctx.script_by_task_map[task_name]
         ticker_task_ctx.task_script_arg = ticker_ctx.config_ctx.script_arg_by_task_map[task_name]
+        ticker_task_ctx.task_stmt_timeout = ticker_ctx.config_ctx.stmt_timeout_by_task_map[task_name]
         ticker_task_ctx.task_timer = ticker_ctx.config_ctx.timer_by_task_map[task_name]
         ticker_task_ctx.thread_pool = ticker_ctx.thread_pool_by_thread_pool_name[thread_pool_name]
         ticker_task_ctx.db_pool = ticker_ctx.db_pool
