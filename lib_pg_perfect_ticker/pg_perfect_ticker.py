@@ -47,6 +47,7 @@ def blocking_read_config(config_ctx, config_path_list):
     
     config_ctx.max_workers_by_thread_pool_map = {}
     config_ctx.dsn_by_db_con_map = {}
+    config_ctx.log_dsn_by_db_con_map = {}
     config_ctx.log_sql_by_db_con_map = {}
     config_ctx.disabled_by_task_map = {}
     config_ctx.sql_by_task_map = {}
@@ -69,6 +70,11 @@ def blocking_read_config(config_ctx, config_path_list):
     
     for db_con in config_ctx.db_con_list:
         dsn_value = config.get(CONFIG_SECTION, '{}.dsn'.format(db_con))
+        log_dsn_value = config.get(
+            CONFIG_SECTION,
+            '{}.log_dsn'.format(db_con),
+            fallback=None,
+        )
         log_sql_value = config.get(
             CONFIG_SECTION,
             '{}.log_sql'.format(db_con),
@@ -76,6 +82,7 @@ def blocking_read_config(config_ctx, config_path_list):
         )
         
         config_ctx.dsn_by_db_con_map[db_con] = dsn_value
+        config_ctx.log_dsn_by_db_con_map[db_con] = log_dsn_value
         config_ctx.log_sql_by_db_con_map[db_con] = log_sql_value
     
     for task in config_ctx.task_list:
@@ -163,9 +170,14 @@ def blocking_ticker_task_process(
         ):
     with contextlib.ExitStack() as stack:
         if ticker_task_ctx.db_con_log_sql is not None:
+            if ticker_task_ctx.db_con_log_dsn is not None:
+                db_con_log_dsn = ticker_task_ctx.db_con_log_dsn
+            else:
+                db_con_log_dsn = ticker_task_ctx.db_con_dsn
+            
             log_con = stack.enter_context(simple_db_pool.get_db_con_ctxmgr(
                 ticker_task_ctx.db_pool,
-                ticker_task_ctx.db_con_dsn,
+                db_con_log_dsn
             ))
             
             assert not log_con.autocommit
@@ -406,6 +418,7 @@ async def ticker_process(loop, ticker_ctx):
         ticker_task_ctx.db_con_name = db_con_name
         ticker_task_ctx.thread_pool_max_workers = ticker_ctx.config_ctx.max_workers_by_thread_pool_map[thread_pool_name]
         ticker_task_ctx.db_con_dsn = ticker_ctx.config_ctx.dsn_by_db_con_map[db_con_name]
+        ticker_task_ctx.db_con_log_dsn = ticker_ctx.config_ctx.log_dsn_by_db_con_map[db_con_name]
         ticker_task_ctx.db_con_log_sql = ticker_ctx.config_ctx.log_sql_by_db_con_map[db_con_name]
         ticker_task_ctx.task_sql = ticker_ctx.config_ctx.sql_by_task_map[task_name]
         ticker_task_ctx.task_script = ticker_ctx.config_ctx.script_by_task_map[task_name]
